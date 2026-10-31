@@ -1,0 +1,12 @@
+params:
+  - id: login_secret
+    type: secret
+    name: Initial administrator login secret
+    description: Initial credential for admin and login autofill. Existing database users are not reset by changing this parameter; keep it synchronized after changing the credential in Miniflux.
+    default_value: "$random(len=20)"
+    optional: false
+locales:
+  zh:
+    login_secret:
+      name: 初始管理员密码
+      description: 新库首次创建admin及后续填充使用；已有用户不会因修改参数自动重置。应用内改密后请同步这里，只向可信成员授予管理账号访问权限。

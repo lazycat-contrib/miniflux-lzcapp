@@ -1,0 +1,56 @@
+application:
+  subdomain: miniflux
+  multi_instance: false
+  upstreams:
+    - location: /
+      backend: http://miniflux:8080/
+  injects:
+    - id: login-autofill
+      on: browser
+      when:
+        - /login
+      do:
+        - src: builtin://simple-inject-password
+          params:
+            user: admin
+            password: |-
+              {{ .U.login_secret | replace "\r" "" | replace "\n" "\n              " }}
+            userSelector: '#form-username'
+            passwordSelector: '#form-password'
+            autoSubmit: false
+services:
+  miniflux:
+    # upstream: docker.io/miniflux/miniflux:2.3.4
+    image: docker.1ms.run/miniflux/miniflux:2.3.4
+    depends_on:
+      - postgres
+    environment:
+      - LISTEN_ADDR=0.0.0.0:8080
+      - BASE_URL=https://{{ .S.AppDomain }}
+      - DATABASE_URL=postgres://miniflux:{{ printf "%x" (stable_secret "miniflux-postgres") }}@postgres:5432/miniflux?sslmode=disable
+      - RUN_MIGRATIONS=1
+      - CREATE_ADMIN=1
+      - ADMIN_USERNAME=admin
+      - |-
+        ADMIN_PASSWORD={{ .U.login_secret | replace "\r" "" | replace "\n" "\n        " }}
+  postgres:
+    # upstream: docker.io/library/postgres:18-alpine
+    image: docker.1ms.run/library/postgres:18-alpine
+    environment:
+      - POSTGRES_DB=miniflux
+      - POSTGRES_USER=miniflux
+      - POSTGRES_PASSWORD={{ printf "%x" (stable_secret "miniflux-postgres") }}
+    binds:
+      - /lzcapp/var/postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "miniflux"]
+      interval: 10s
+      start_period: 30s
+usage: |
+  Miniflux 是RSS/Atom阅读器，内置PostgreSQL容器，持久保存订阅、文章与阅读状态。
+  全新数据库首次创建admin账号，初始密码来自部署参数；/login自动填充，不自动提交。保留懒猫入口认证，无匿名公共路径。
+  当前填充的是共享管理员账号，只授可信成员；Miniflux内可另建用户，但本包不提供按懒猫身份的账户隔离。
+  初始管理员创建不应当作密码重置；已有账号在应用内改密后需同步部署参数，单改参数不保证更新数据库已有密码。
+  数据保存在/lzcapp/var/postgres，卸载前须备份。数据库主版本固定18，不应直接换大版本挂载旧数据；数据库端口不外露。
+  保留上游pg_isready健康检查，不新增smoke或启动测试作业；不加文件选择器拦截。API/外部客户端仍需自行处理入口认证。
+  未验证实机启动、数据库迁移、首次用户创建、登录填充、订阅抓取或重启持久化。

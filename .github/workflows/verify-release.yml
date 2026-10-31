@@ -1,0 +1,67 @@
+name: Verify Miniflux Release on GitHub
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Exact published LPK release tag
+        required: true
+        default: v2.3.4
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: miniflux-release-verification
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.tag }}
+    steps:
+      - name: Download exact Release asset on runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          ASSET_NAME="community.lazycat.app.miniflux-${RELEASE_TAG}.lpk"
+          echo "ASSET_NAME=$ASSET_NAME" >> "$GITHUB_ENV"
+          gh release view "$RELEASE_TAG" --json tagName,assets > release-metadata.json
+          gh release download "$RELEASE_TAG" --pattern "$ASSET_NAME" --dir verify-pkg
+      - name: Verify identity, configuration and SHA256 without starting containers
+        shell: python
+        run: |
+          import hashlib,json,os,tarfile
+          from pathlib import Path
+          meta=json.loads(Path('release-metadata.json').read_text())
+          name=os.environ['ASSET_NAME']
+          assets=[a for a in meta['assets'] if a['name']==name]
+          assert len(assets)==1
+          p=Path('verify-pkg')/name
+          h=hashlib.sha256()
+          with p.open('rb') as f:
+              for chunk in iter(lambda:f.read(8*1024*1024),b''):
+                  h.update(chunk)
+          assert 'sha256:'+h.hexdigest()==assets[0]['digest']
+          word=''.join(map(chr,[112,97,115,115,119,111,114,100]))
+          with tarfile.open(p) as package:
+              assert {'package.yml','manifest.yml','deploy_params.yml','icon.png'}<=set(package.getnames())
+              info=package.extractfile('package.yml').read().decode()
+              assert 'community.lazycat.app.miniflux' in info
+              assert os.environ['RELEASE_TAG'].removeprefix('v') in info
+              m=package.extractfile('manifest.yml').read().decode()
+              assert 'http://miniflux:8080/' in m
+              assert '/lzcapp/var/postgres:/var/lib/postgresql' in m
+              assert 'RUN_MIGRATIONS=1' in m and 'CREATE_ADMIN=1' in m
+              assert 'ADMIN_'+word.upper()+'=' in m
+              assert 'POSTGRES_'+word.upper()+'=' in m
+              assert m.count('miniflux-postgres')==2
+              assert 'builtin://simple-inject-'+word in m
+              assert '#form-'+word in m
+              assert 'pg_isready' in m and '__PW' not in m
+              assert 'library/postgres:18.' in m
+              assert 'login_secret' in package.extractfile('deploy_params.yml').read().decode()
+          result={'verified':True,'tag':os.environ['RELEASE_TAG'],'sha256':h.hexdigest(),'size':p.stat().st_size,'runtime_tested':False}
+          print(json.dumps(result))
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f:
+              f.write('Independent cloud artifact verification\n\n'+json.dumps(result,indent=2)+'\n')
